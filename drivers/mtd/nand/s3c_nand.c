@@ -186,6 +186,19 @@ void print_oob(const char *header, struct mtd_info *mtd) {
 EXPORT_SYMBOL(print_oob);
 #endif
 
+static void s3c_nand_select_chip(struct mtd_info *mtd, int chip)
+{
+  void __iomem *regs = s3c_nand.regs;
+	int ctrl = readl(regs + S3C_NFCONT);
+	switch (chip) {
+	case -1: ctrl |= 6;break;
+	case 0:ctrl &= ~2; break;
+	case 1: ctrl &= ~4; break;
+	default:
+		return;
+	}
+	writel(ctrl, regs + S3C_NFCONT);
+}
 /*
  * Hardware specific access to control-lines function
  * Written by jsgood
@@ -194,18 +207,21 @@ static void s3c_nand_hwcontrol(struct mtd_info *mtd, int dat,
                                unsigned int ctrl) {
   unsigned int cur;
   void __iomem *regs = s3c_nand.regs;
+	struct nand_chip *this = mtd->priv;
 
   if (ctrl & NAND_CTRL_CHANGE) {
     if (ctrl & NAND_NCE) {
-      if (dat != NAND_CMD_NONE) {
-        cur = readl(regs + S3C_NFCONT);
-        cur &= ~S3C_NFCONT_nFCE0;
-        writel(cur, regs + S3C_NFCONT);
-      }
+      // if (dat != NAND_CMD_NONE) {
+      s3c_nand_select_chip(mtd, 0);
+        // cur = readl(regs + S3C_NFCONT);
+        // cur &= ~S3C_NFCONT_nFCE0;
+        // writel(cur, regs + S3C_NFCONT);
+      // }
     } else {
-      cur = readl(regs + S3C_NFCONT);
-      cur |= S3C_NFCONT_nFCE0;
-      writel(cur, regs + S3C_NFCONT);
+      s3c_nand_select_chip(mtd, -1);
+      // cur = readl(regs + S3C_NFCONT);
+      // cur |= S3C_NFCONT_nFCE0;
+      // writel(cur, regs + S3C_NFCONT);
     }
   }
 
@@ -214,6 +230,8 @@ static void s3c_nand_hwcontrol(struct mtd_info *mtd, int dat,
       writeb(dat, regs + S3C_NFCMMD);
     else if (ctrl & NAND_ALE)
       writeb(dat, regs + S3C_NFADDR);
+      else
+      writeb(dat, regs + S3C_NFDATA);
   }
 }
 
@@ -353,7 +371,7 @@ static void s3c_nand_enable_hwecc(struct mtd_info *mtd, int mode) {
 
   /* Init main ECC & unlock */
   nfcont = readl(regs + S3C_NFCONT);
-  nfcont |= S3C_NFCONT_INITMECC;
+  // nfcont |= S3C_NFCONT_INITMECC;
   nfcont &= ~S3C_NFCONT_MECCLOCK;
 
   if (nand_type == S3C_NAND_TYPE_MLC_4BIT ||
@@ -365,6 +383,10 @@ static void s3c_nand_enable_hwecc(struct mtd_info *mtd, int mode) {
   }
 
   writel(nfcont, regs + S3C_NFCONT);
+  //初始化MECC和SECC
+  nfcont = readl(regs + S3C_NFCONT);
+  nfcont |= S3C_NFCONT_INITECC;
+  writel(nfcont, S3C_NFCONT);
 }
 
 /*
@@ -796,325 +818,352 @@ static void s3c_nand_write_page_4bit(struct mtd_info *mtd,
 }
 #endif
 
-#if 0
+#if 1
 
-int s3c_nand_calculate_ecc_8bit(struct mtd_info *mtd, const u_char *dat, u_char *ecc_code)
-{
-	u_long nfcont, nfm8ecc0, nfm8ecc1, nfm8ecc2, nfm8ecc3;
+int s3c_nand_calculate_ecc_8bit(struct mtd_info *mtd, const u_char *dat,
+                                u_char *ecc_code) {
+  u_long nfcont, nfm8ecc0, nfm8ecc1, nfm8ecc2, nfm8ecc3;
+  void __iomem *regs = s3c_nand.regs;
 
-	/* Lock */
-	nfcont = readl(NFCONT);
-	nfcont |= NFCONT_MECCLOCK;
-	writel(nfcont, NFCONT);
+  if (cur_ecc_mode == NAND_ECC_READ) {
+    //锁MECC
+    nfcont = readl(regs + S3C_NFCONT);
+    nfcont |= S3C_NFCONT_MECCLOCK;
+    writel(nfcont, regs + S3C_NFCONT);
 
-	if (cur_ecc_mode == NAND_ECC_READ)
-		s3c_nand_wait_dec();
-	else {
-		s3c_nand_wait_enc();
-		
-		nfm8ecc0 = readl(NFM8ECC0);
-		nfm8ecc1 = readl(NFM8ECC1);
-		nfm8ecc2 = readl(NFM8ECC2);
-		nfm8ecc3 = readl(NFM8ECC3);
+    // printf("NAND:wait ecc decode\n");
+    s3c_nand_wait_dec();
+    // printf("NAND:ecc decode finished\n");
 
-		ecc_code[0] = nfm8ecc0 & 0xff;
-		ecc_code[1] = (nfm8ecc0 >> 8) & 0xff;
-		ecc_code[2] = (nfm8ecc0 >> 16) & 0xff;
-		ecc_code[3] = (nfm8ecc0 >> 24) & 0xff;			
-		ecc_code[4] = nfm8ecc1 & 0xff;
-		ecc_code[5] = (nfm8ecc1 >> 8) & 0xff;
-		ecc_code[6] = (nfm8ecc1 >> 16) & 0xff;
-		ecc_code[7] = (nfm8ecc1 >> 24) & 0xff;
-		ecc_code[8] = nfm8ecc2 & 0xff;
-		ecc_code[9] = (nfm8ecc2 >> 8) & 0xff;
-		ecc_code[10] = (nfm8ecc2 >> 16) & 0xff;
-		ecc_code[11] = (nfm8ecc2 >> 24) & 0xff;
-		ecc_code[12] = nfm8ecc3 & 0xff;
-	}
-	
-	return 0;
-}
+  } else {
+    // printf("NAND:wait ecc encode\n");
+    s3c_nand_wait_enc();
+    // printf("NAND:ecc encode finished\n");
 
-
-
-void s3c_nand_enable_hwecc_8bit(struct mtd_info *mtd, int mode)
-{
-	u_long nfcont, nfconf;
-
-	cur_ecc_mode = mode;
-
-	/* 8 bit selection */
-	nfconf = readl(NFCONF);
-
-	nfconf &= ~(0x3 << 23);
-	nfconf |= (0x1 << 23);
-	
-	writel(nfconf, NFCONF);
-
-	/* Initialize & unlock */
-	nfcont = readl(NFCONT);
-	nfcont |= NFCONT_INITECC;
-	nfcont &= ~NFCONT_MECCLOCK;
-
-	if (mode == NAND_ECC_WRITE)
-		nfcont |= NFCONT_ECC_ENC;
-	else if (mode == NAND_ECC_READ)
-		nfcont &= ~NFCONT_ECC_ENC;
-
-	writel(nfcont, NFCONT);
-}
-
-
-
-int s3c_nand_correct_data_8bit(struct mtd_info *mtd, u_char *dat, u_char *read_ecc, u_char *calc_ecc)
-{
-	int ret = -1;
-	u_long nf8eccerr0, nf8eccerr1, nf8eccerr2, nfmlc8bitpt0, nfmlc8bitpt1;
-	u_char err_type;
-
-	s3c_nand_wait_ecc_busy_8bit();
-	
-	nf8eccerr0 = readl(NF8ECCERR0);
-	nf8eccerr1 = readl(NF8ECCERR1);
-	nf8eccerr2 = readl(NF8ECCERR2);
-	nfmlc8bitpt0 = readl(NFMLC8BITPT0);
-	nfmlc8bitpt1 = readl(NFMLC8BITPT1);
-	
-	err_type = (nf8eccerr0 >> 25) & 0xf;
-
-	/* No error, If free page (all 0xff) */
-	if ((nf8eccerr0 >> 29) & 0x1)
-		err_type = 0;
-
-	switch (err_type) {
-	case 9: /* Uncorrectable */
-		printk("s3c-nand: ECC uncorrectable error detected\n");
-		ret = -1;
-		break;
-
-	case 8: /* 8 bit error (Correctable) */
-		dat[(nf8eccerr2 >> 22) & 0x3ff] ^= ((nfmlc8bitpt1 >> 24) & 0xff);
-
-	case 7: /* 7 bit error (Correctable) */
-		dat[(nf8eccerr2 >> 11) & 0x3ff] ^= ((nfmlc8bitpt1 >> 16) & 0xff);
-
-	case 6: /* 6 bit error (Correctable) */
-		dat[nf8eccerr2 & 0x3ff] ^= ((nfmlc8bitpt1 >> 8) & 0xff);
-
-	case 5: /* 5 bit error (Correctable) */
-		dat[(nf8eccerr1 >> 22) & 0x3ff] ^= (nfmlc8bitpt1 & 0xff);
-
-	case 4: /* 4 bit error (Correctable) */
-		dat[(nf8eccerr1 >> 11) & 0x3ff] ^= ((nfmlc8bitpt0 >> 24) & 0xff);
-
-	case 3: /* 3 bit error (Correctable) */
-		dat[nf8eccerr1 & 0x3ff] ^= ((nfmlc8bitpt0 >> 16) & 0xff);
-
-	case 2: /* 2 bit error (Correctable) */
-		dat[(nf8eccerr0 >> 15) & 0x3ff] ^= ((nfmlc8bitpt0 >> 8) & 0xff);
-
-	case 1: /* 1 bit error (Correctable) */
-		printk("s3c-nand: %d bit(s) error detected, corrected successfully\n", err_type);
-		dat[nf8eccerr0 & 0x3ff] ^= (nfmlc8bitpt0 & 0xff);
-		ret = err_type;
-		break;
-
-	case 0: /* No error */
-		ret = 0;
-		break;
-	}
-
-	return ret;
-}
-#endif
-
-void s3c_nand_write_page_8bit(struct mtd_info *mtd, struct nand_chip *chip,
-                              const uint8_t *buf) {
-  int i, eccsize = 512;
-  int eccbytes = 13;
-  int eccsteps = mtd->writesize / eccsize;
-  uint8_t *ecc_calc = chip->buffers->ecccalc;
-  uint8_t *p = buf;
-  uint32_t *mecc_pos = chip->ecc.layout->eccpos;
-
-  for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
-    chip->ecc.hwctl(mtd, NAND_ECC_WRITE);
-    chip->write_buf(mtd, p, eccsize);
-    chip->ecc.calculate(mtd, p, &ecc_calc[i]);
-  }
-
-  for (i = 0; i < eccbytes * (mtd->writesize / eccsize); i++)
-    chip->oob_poi[mecc_pos[i]] = ecc_calc[i];
-
-  chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
-}
-
-int s3c_nand_read_page_8bit(struct mtd_info *mtd, struct nand_chip *chip,
-                            uint8_t *buf) {
-  int i, stat, eccsize = 512;
-  int eccbytes = 13;
-  int eccsteps = mtd->writesize / eccsize;
-  int col = 0;
-  uint8_t *p = buf;
-  uint32_t *mecc_pos = chip->ecc.layout->eccpos;
-
-  /* Step1: read whole oob */
-  col = mtd->writesize;
-  chip->cmdfunc(mtd, NAND_CMD_RNDOUT, col, -1);
-  chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
-
-  col = 0;
-  for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
-    chip->cmdfunc(mtd, NAND_CMD_RNDOUT, col, -1);
-    // s3c_nand_enable_hwecc_8bit(mtd, NAND_ECC_READ);
-    chip->ecc.hwctl(mtd, NAND_ECC_READ);
-    chip->read_buf(mtd, p, eccsize);
-    chip->write_buf(
-        mtd,
-        chip->oob_poi + mecc_pos[0] + ((chip->ecc.steps - eccsteps) * eccbytes),
-        eccbytes);
-
-    // s3c_nand_calculate_ecc_8bit(mtd, 0, 0);
-    // stat = s3c_nand_correct_data_8bit(mtd, p, 0, 0);
-    chip->ecc.calculate(mtd, 0, 0);
-    stat = chip->ecc.correct(mtd, p, 0, 0);
-
-    if (stat == -1) mtd->ecc_stats.failed++;
-
-    col = eccsize * ((mtd->writesize / eccsize) + 1 - eccsteps);
+    //锁MECC
+    nfcont = readl(regs + S3C_NFCONT);
+    // printf("debug 1\n");
+    nfcont |= S3C_NFCONT_MECCLOCK;
+    writel(nfcont, regs + S3C_NFCONT);
+    // printf("debug 2\n");
+    nfm8ecc0 = readl(regs + S3C_NFM8ECC0);
+    nfm8ecc1 = readl(regs + S3C_NFM8ECC1);
+    nfm8ecc2 = readl(regs + S3C_NFM8ECC2);
+    nfm8ecc3 = readl(regs + S3C_NFM8ECC3);
+    // printf("debug 3\n");
+    ecc_code[0] = nfm8ecc0 & 0xff;
+    ecc_code[1] = (nfm8ecc0 >> 8) & 0xff;
+    ecc_code[2] = (nfm8ecc0 >> 16) & 0xff;
+    ecc_code[3] = (nfm8ecc0 >> 24) & 0xff;
+    ecc_code[4] = nfm8ecc1 & 0xff;
+    ecc_code[5] = (nfm8ecc1 >> 8) & 0xff;
+    ecc_code[6] = (nfm8ecc1 >> 16) & 0xff;
+    ecc_code[7] = (nfm8ecc1 >> 24) & 0xff;
+    ecc_code[8] = nfm8ecc2 & 0xff;
+    ecc_code[9] = (nfm8ecc2 >> 8) & 0xff;
+    ecc_code[10] = (nfm8ecc2 >> 16) & 0xff;
+    ecc_code[11] = (nfm8ecc2 >> 24) & 0xff;
+    ecc_code[12] = nfm8ecc3 & 0xff;
+    // printf("debug 4\n");
   }
 
   return 0;
 }
 
-/* s3c_nand_probe
- *
- * called by device layer when it finds a device matching
- * one our driver can handled. This code checks to see if
- * it can allocate all necessary resources then calls the
- * nand layer to look for devices
- */
-static int s3c_nand_probe(struct platform_device *pdev,
-                          enum s3c_cpu_type cpu_type) {
-  struct s3c2410_platform_nand *plat = pdev->dev.platform_data;
-  struct s3c2410_nand_set *sets;
-  struct nand_chip *nand;
-  struct resource *res;
-  int err = 0;
-  int ret = 0;
-  int nr_sets;
-  int i, j, size;
+int s3c_nand_enable_hwecc_8bit(struct mtd_info *mtd, int mode) {
+  u_long nfcont, nfconf;
+  void __iomem *regs = s3c_nand.regs;
 
-#if defined(CONFIG_MTD_NAND_S3C_HWECC)
-  struct nand_flash_dev *type = NULL;
-  u_char tmp;
-  u_char dev_id;
+  cur_ecc_mode = mode;
+
+  //清ECCTypte,设置ECCTpye = 8bit
+  nfconf = readl(regs + S3C_NFCONF);
+  nfconf &= ~(0x3 << 23);
+  nfconf |= S3C_NFCONF_ECC_8BIT;
+  writel(nfconf, regs + S3C_NFCONF);
+  //解锁MECC
+  nfcont = readl(regs + S3C_NFCONT);
+  nfcont &= ~S3C_NFCONT_MECCLOCK;
+  //根据读写，控制ECC模块encode or decode
+  if (mode == NAND_ECC_WRITE)
+    nfcont |= S3C_NFCONT_ECC_ENC;  // 1 - 编码
+  else if (mode == NAND_ECC_READ)
+    nfcont &= ~S3C_NFCONT_ECC_ENC;  // 0 - 解码
+  nfcont |= (1 << 11);              // stop ecc before initlize ecc
+  writel(nfcont, regs + S3C_NFCONT);
+  //初始化MECC和SECC
+  nfcont = readl(regs + S3C_NFCONT);
+  nfcont |= S3C_NFCONT_INITECC;
+  writel(nfcont, regs + S3C_NFCONT);
+  return 0;
+}
+
+int s3c_nand_correct_data_8bit(struct mtd_info *mtd, u_char *dat,
+                               u_char *read_ecc, u_char *calc_ecc) {
+  int ret = -1;
+  u_long nf8eccerr0, nf8eccerr1, nf8eccerr2, nfmlc8bitpt0, nfmlc8bitpt1;
+  u_char err_type;
+  void __iomem *regs = s3c_nand.regs;
+  // s3c_nand_wait_ecc_busy_8bit();
+
+  nf8eccerr0 = readl(regs + S3C_NF8ECCERR0);
+  nf8eccerr1 = readl(regs + S3C_NF8ECCERR1);
+  nf8eccerr2 = readl(regs + S3C_NF8ECCERR2);
+  nfmlc8bitpt0 = readl(regs + S3C_NFMLC8BITPT0);
+  nfmlc8bitpt1 = readl(regs + S3C_NFMLC8BITPT1);
+
+  err_type = (nf8eccerr0 >> 25) & 0xf;
+
+  /* No error, If free page (all 0xff) */
+  if ((nf8eccerr0 >> 29) & 0x1) err_type = 0;
+
+  switch (err_type) {
+    case 8: /* 8 bit error (Correctable) */
+      dat[(nf8eccerr2 >> 22) & 0x3ff] ^= ((nfmlc8bitpt1 >> 24) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 7: /* 7 bit error (Correctable) */
+      dat[(nf8eccerr2 >> 11) & 0x3ff] ^= ((nfmlc8bitpt1 >> 16) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 6: /* 6 bit error (Correctable) */
+      dat[nf8eccerr2 & 0x3ff] ^= ((nfmlc8bitpt1 >> 8) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 5: /* 5 bit error (Correctable) */
+      dat[(nf8eccerr1 >> 22) & 0x3ff] ^= (nfmlc8bitpt1 & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 4: /* 4 bit error (Correctable) */
+      dat[(nf8eccerr1 >> 11) & 0x3ff] ^= ((nfmlc8bitpt0 >> 24) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 3: /* 3 bit error (Correctable) */
+      dat[nf8eccerr1 & 0x3ff] ^= ((nfmlc8bitpt0 >> 16) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 2: /* 2 bit error (Correctable) */
+      dat[(nf8eccerr0 >> 15) & 0x3ff] ^= ((nfmlc8bitpt0 >> 8) & 0xff);
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+
+    case 1: /* 1 bit error (Correctable) */
+      printk("s3c-nand: %d bit(s) error detected, corrected successfully\n",
+             err_type);
+      dat[nf8eccerr0 & 0x3ff] ^= (nfmlc8bitpt0 & 0xff);
+      ret = err_type;
+      break;
+
+    case 0: /* No error */
+            // printf("s3c-nand: not exist bit error.\n");
+      ret = 0;
+      break;
+    default:
+      break;
+  }
+    return ret;
+}
 #endif
 
-  /* get the clock source and enable it */
-
-  s3c_nand.clk = clk_get(&pdev->dev, "nand");
-  if (IS_ERR(s3c_nand.clk)) {
-    dev_err(&pdev->dev, "failed to get clock");
-    err = -ENOENT;
-    goto exit_error;
-  }
-
-  clk_enable(s3c_nand.clk);
-
-  /* allocate and map the resource */
-
-  /* currently we assume we have the one resource */
-  res = pdev->resource;
-  size = res->end - res->start + 1;
-
-  s3c_nand.area = request_mem_region(res->start, size, pdev->name);
-
-  if (s3c_nand.area == NULL) {
-    dev_err(&pdev->dev, "cannot reserve register region\n");
-    err = -ENOENT;
-    goto exit_error;
-  }
-
-  s3c_nand.cpu_type = cpu_type;
-  s3c_nand.device = &pdev->dev;
-  s3c_nand.regs = ioremap(res->start, size);
-  s3c_nand.platform = plat;
-
-  if (s3c_nand.regs == NULL) {
-    dev_err(&pdev->dev, "cannot reserve register region\n");
-    err = -EIO;
-    goto exit_error;
-  }
-
-  sets = (plat != NULL) ? plat->sets : NULL;
-  nr_sets = (plat != NULL) ? plat->nr_sets : 1;
-
-  s3c_nand.mtd_count = nr_sets;
-
-  /* allocate memory for MTD device structure and private data */
-  s3c_mtd =
-      kmalloc(sizeof(struct mtd_info) + sizeof(struct nand_chip), GFP_KERNEL);
-
-  if (!s3c_mtd) {
-    printk("Unable to allocate NAND MTD dev structure.\n");
-    return -ENOMEM;
-  }
-
-  /* Get pointer to private data */
-  nand = (struct nand_chip *)(&s3c_mtd[1]);
-
-  /* Initialize structures */
-  memset((char *)s3c_mtd, 0, sizeof(struct mtd_info));
-  memset((char *)nand, 0, sizeof(struct nand_chip));
-
-  /* Link the private data with the MTD structure */
-  s3c_mtd->priv = nand;
-
-  for (i = 0; i < sets->nr_chips; i++) {
-    nand->IO_ADDR_R = (char *)(s3c_nand.regs + S3C_NFDATA);
-    nand->IO_ADDR_W = (char *)(s3c_nand.regs + S3C_NFDATA);
-    nand->cmd_ctrl = s3c_nand_hwcontrol;
-    nand->dev_ready = s3c_nand_device_ready;
-    nand->scan_bbt = s3c_nand_scan_bbt;
-    nand->options = 0;
-
-#if defined(CONFIG_MTD_NAND_S3C_CACHEDPROG)
-    nand->options |= NAND_CACHEPRG;
-#endif
-
-#if defined(CONFIG_MTD_NAND_S3C_HWECC)
-    nand->ecc.mode = NAND_ECC_HW;
-    nand->ecc.hwctl = s3c_nand_enable_hwecc;
-    nand->ecc.calculate = s3c_nand_calculate_ecc;
-    nand->ecc.correct = s3c_nand_correct_data;
-
-    s3c_nand_hwcontrol(0, NAND_CMD_READID,
-                       NAND_NCE | NAND_CLE | NAND_CTRL_CHANGE);
-    s3c_nand_hwcontrol(0, 0x00, NAND_CTRL_CHANGE | NAND_NCE | NAND_ALE);
-    s3c_nand_hwcontrol(0, 0x00, NAND_NCE | NAND_ALE);
-    s3c_nand_hwcontrol(0, NAND_CMD_NONE, NAND_NCE | NAND_CTRL_CHANGE);
-    s3c_nand_device_ready(0);
-
-    tmp = readb(nand->IO_ADDR_R);          /* Maf. ID */
-    dev_id = tmp = readb(nand->IO_ADDR_R); /* Device ID */
-
-    for (j = 0; nand_flash_ids[j].name != NULL; j++) {
-      if (tmp == nand_flash_ids[j].id) {
-        type = &nand_flash_ids[j];
-        break;
-      }
+  int s3c_nand_write_page_8bit(struct mtd_info * mtd, struct nand_chip * chip,
+                               const uint8_t *buf) {
+    uint32_t *mecc_pos = chip->ecc.layout->eccpos;
+    int i, eccsize = 512;
+    int eccbytes = 13;
+    int eccsteps = mtd->writesize / eccsize;     // 4096/512 = 8
+    uint8_t *ecc_calc = chip->buffers->ecccalc;  // ecc_buf
+    uint8_t *p = buf;                            // dat_buf
+    // i+=13 , p+= 512
+    for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
+      // printf("nand write page dubug 1\n");
+      s3c_nand_enable_hwecc_8bit(mtd, NAND_ECC_WRITE);
+      // printf("nand write page dubug 2\n");
+      chip->write_buf(mtd, p, eccsize);
+      // printf("nand write page dubug 3\n");
+      s3c_nand_calculate_ecc_8bit(mtd, p, &ecc_calc[i]);  //将ecc码存入ecc_calc
+      // printf("nand write page dubug 4\n");
     }
 
-    if (!type) {
-      printk("Unknown NAND Device.\n");
+    for (i = 0; i < eccbytes * (mtd->writesize / eccsize); i++)
+      chip->oob_poi[mecc_pos[i]] = ecc_calc[i];
+    chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
+    return 0;
+  }
+
+  int s3c_nand_read_page_8bit(struct mtd_info * mtd, struct nand_chip * chip,
+                              uint8_t * buf) {
+    int i, stat, eccsize = 512, j, k;
+    int eccbytes = 13;
+    int eccsteps = mtd->writesize / eccsize;  // = 8
+    int col = 0;
+    uint32_t *mecc_pos = chip->ecc.layout->eccpos;
+    uint8_t *p = buf;
+
+    /* Step1: read whole oob */
+    col = mtd->writesize;
+    chip->cmdfunc(mtd, NAND_CMD_RNDOUT, col, -1);
+    chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+    col = 0;
+    for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
+      chip->cmdfunc(mtd, NAND_CMD_RNDOUT, col, -1);
+      s3c_nand_enable_hwecc_8bit(mtd, NAND_ECC_READ);
+      chip->read_buf(mtd, p, eccsize);
+
+      chip->write_buf(mtd,
+                      chip->oob_poi + mecc_pos[0] +
+                          (((mtd->writesize / eccsize) - eccsteps) * eccbytes),
+                      eccbytes);
+
+      s3c_nand_calculate_ecc_8bit(mtd, 0, 0);
+
+      stat = s3c_nand_correct_data_8bit(mtd, p, 0, 0);
+
+      if (stat == -1) mtd->ecc_stats.failed++;
+      col = eccsize * ((mtd->writesize / eccsize) + 1 - eccsteps);
+    }
+
+    return 0;
+  }
+
+  /* s3c_nand_probe
+   *
+   * called by device layer when it finds a device matching
+   * one our driver can handled. This code checks to see if
+   * it can allocate all necessary resources then calls the
+   * nand layer to look for devices
+   */
+  static int s3c_nand_probe(struct platform_device * pdev,
+                            enum s3c_cpu_type cpu_type) {
+    struct s3c2410_platform_nand *plat = pdev->dev.platform_data;
+    struct s3c2410_nand_set *sets;
+    struct nand_chip *nand;
+    struct resource *res;
+    int err = 0;
+    int ret = 0;
+    int nr_sets;
+    int i, j, size;
+
+#if defined(CONFIG_MTD_NAND_S3C_HWECC)
+    struct nand_flash_dev *type = NULL;
+    u_char tmp;
+    u_char dev_id;
+#endif
+
+    /* get the clock source and enable it */
+
+    s3c_nand.clk = clk_get(&pdev->dev, "nand");
+    if (IS_ERR(s3c_nand.clk)) {
+      dev_err(&pdev->dev, "failed to get clock");
+      err = -ENOENT;
       goto exit_error;
     }
 
-    nand->cellinfo = readb(nand->IO_ADDR_R); /* the 3rd byte */
-    tmp = readb(nand->IO_ADDR_R);            /* the 4th byte */
-    if (!type->pagesize) {
-      if (((nand->cellinfo >> 2) & 0x3) == 0) {
+    clk_enable(s3c_nand.clk);
+
+    /* allocate and map the resource */
+
+    /* currently we assume we have the one resource */
+    res = pdev->resource;
+    size = res->end - res->start + 1;
+
+    s3c_nand.area = request_mem_region(res->start, size, pdev->name);
+
+    if (s3c_nand.area == NULL) {
+      dev_err(&pdev->dev, "cannot reserve register region\n");
+      err = -ENOENT;
+      goto exit_error;
+    }
+
+    s3c_nand.cpu_type = cpu_type;
+    s3c_nand.device = &pdev->dev;
+    s3c_nand.regs = ioremap(res->start, size);
+    s3c_nand.platform = plat;
+
+    if (s3c_nand.regs == NULL) {
+      dev_err(&pdev->dev, "cannot reserve register region\n");
+      err = -EIO;
+      goto exit_error;
+    }
+
+    sets = (plat != NULL) ? plat->sets : NULL;
+    nr_sets = (plat != NULL) ? plat->nr_sets : 1;
+
+    s3c_nand.mtd_count = nr_sets;
+
+    /* allocate memory for MTD device structure and private data */
+    s3c_mtd =
+        kmalloc(sizeof(struct mtd_info) + sizeof(struct nand_chip), GFP_KERNEL);
+
+    if (!s3c_mtd) {
+      printk("Unable to allocate NAND MTD dev structure.\n");
+      return -ENOMEM;
+    }
+
+    /* Get pointer to private data */
+    nand = (struct nand_chip *)(&s3c_mtd[1]);
+
+    /* Initialize structures */
+    memset((char *)s3c_mtd, 0, sizeof(struct mtd_info));
+    memset((char *)nand, 0, sizeof(struct nand_chip));
+
+    /* Link the private data with the MTD structure */
+    s3c_mtd->priv = nand;
+
+    for (i = 0; i < sets->nr_chips; i++) {
+      nand->IO_ADDR_R = (char *)(s3c_nand.regs + S3C_NFDATA);
+      nand->IO_ADDR_W = (char *)(s3c_nand.regs + S3C_NFDATA);
+      nand->cmd_ctrl = s3c_nand_hwcontrol;
+      nand->dev_ready = s3c_nand_device_ready;
+      nand->scan_bbt = s3c_nand_scan_bbt;
+      nand->options = 0;
+
+#if defined(CONFIG_MTD_NAND_S3C_CACHEDPROG)
+      nand->options |= NAND_CACHEPRG;
+#endif
+
+#if defined(CONFIG_MTD_NAND_S3C_HWECC)
+      nand->ecc.mode = NAND_ECC_HW;
+      // nand->ecc.hwctl = s3c_nand_enable_hwecc;
+      // nand->ecc.calculate = s3c_nand_calculate_ecc;
+      // nand->ecc.correct = s3c_nand_correct_data;
+      nand->ecc.hwctl = s3c_nand_enable_hwecc_8bit;
+      nand->ecc.calculate = s3c_nand_calculate_ecc_8bit;
+      nand->ecc.correct = s3c_nand_correct_data_8bit;
+      nand->ecc.read_page = s3c_nand_read_page_8bit;
+      nand->ecc.write_page = s3c_nand_write_page_8bit;
+
+      s3c_nand_hwcontrol(0, NAND_CMD_READID,
+                         NAND_NCE | NAND_CLE | NAND_CTRL_CHANGE);
+      s3c_nand_hwcontrol(0, 0x00, NAND_CTRL_CHANGE | NAND_NCE | NAND_ALE);
+      s3c_nand_hwcontrol(0, 0x00, NAND_NCE | NAND_ALE);
+      s3c_nand_hwcontrol(0, NAND_CMD_NONE, NAND_NCE | NAND_CTRL_CHANGE);
+      s3c_nand_device_ready(0);
+
+      tmp = readb(nand->IO_ADDR_R);          /* Maf. ID */
+      dev_id = tmp = readb(nand->IO_ADDR_R); /* Device ID */
+
+      for (j = 0; nand_flash_ids[j].name != NULL; j++) {
+        if (tmp == nand_flash_ids[j].id) {
+          type = &nand_flash_ids[j];
+          break;
+        }
+      }
+
+      if (!type) {
+        printk("Unknown NAND Device.\n");
+        goto exit_error;
+      }
+
+      nand->cellinfo = readb(nand->IO_ADDR_R); /* the 3rd byte */
+      tmp = readb(nand->IO_ADDR_R);            /* the 4th byte */
+      if (!type->pagesize) {
+        if (((nand->cellinfo >> 2) & 0x3) == 0) {
 #if 0
 				nand_type = S3C_NAND_TYPE_MLC_4BIT;
 				nand->options |= NAND_NO_SUBPAGE_WRITE;	/* NOP = 1 if MLC */
@@ -1131,198 +1180,198 @@ static int s3c_nand_probe(struct platform_device *pdev,
 					nand->ecc.layout = &s3c_nand_oob_16;
 				}
 #endif
+          nand_type = S3C_NAND_TYPE_SLC;
+          nand->ecc.size = 512;
+          nand->ecc.bytes = 4;
+
+          if ((1024 << (tmp & 0x3)) > 512) {
+            nand->ecc.read_page = s3c_nand_read_page_1bit;
+            nand->ecc.write_page = s3c_nand_write_page_1bit;
+            nand->ecc.read_oob = s3c_nand_read_oob_1bit;
+            nand->ecc.write_oob = s3c_nand_write_oob_1bit;
+            nand->ecc.layout = &s3c_nand_oob_64;
+
+            printk(
+                "********Nandflash:Type=SLC  ChipName:samsung-K9F2G08U0B or "
+                "hynix-HY27UF082G2B****** \n");
+
+          } else {
+            nand->ecc.layout = &s3c_nand_oob_16;
+          }
+
+        } else {
+          nand_type = S3C_NAND_TYPE_MLC_4BIT;
+          nand->options |= NAND_NO_SUBPAGE_WRITE; /* NOP = 1 if MLC */
+          nand->ecc.read_page = s3c_nand_read_page_4bit;
+          nand->ecc.write_page = s3c_nand_write_page_4bit;
+          nand->ecc.size = 512;
+          nand->ecc.bytes = 8; /* really 7 bytes */
+          nand->ecc.layout = &s3c_nand_oob_mlc_64;
+
+          if (dev_id == 0xd5) {
+            printk("dev_id == 0xd5 select s3c_nand_oob_mlc\n");
+
+            // printk("**************************debug*****Use 8bit hardware ecc
+            // *******************\n");
+
+            nand_type = S3C_NAND_TYPE_MLC_8BIT;
+            nand->ecc.read_page = s3c_nand_read_page_8bit;
+            nand->ecc.write_page = s3c_nand_write_page_8bit;
+            nand->ecc.size = 512;
+            nand->ecc.bytes = 13;
+
+            nand->ecc.layout = &s3c_nand_oob_mlc_218_8bit;
+
+            printk(
+                "****Nandflash:ChipType= MLC  "
+                "ChipName=samsung-K9GAG08U0D************ \n");
+
+          } else {
+            printk(
+                "****Nandflash:ChipType=MLC  "
+                "ChipName=samsung-K9G8G08U0A************** \n");
+          }
+        }
+      } else {
         nand_type = S3C_NAND_TYPE_SLC;
         nand->ecc.size = 512;
+        nand->cellinfo = 0;
         nand->ecc.bytes = 4;
-
-        if ((1024 << (tmp & 0x3)) > 512) {
-          nand->ecc.read_page = s3c_nand_read_page_1bit;
-          nand->ecc.write_page = s3c_nand_write_page_1bit;
-          nand->ecc.read_oob = s3c_nand_read_oob_1bit;
-          nand->ecc.write_oob = s3c_nand_write_oob_1bit;
-          nand->ecc.layout = &s3c_nand_oob_64;
-
-          printk(
-              "********Nandflash:Type=SLC  ChipName:samsung-K9F2G08U0B or "
-              "hynix-HY27UF082G2B****** \n");
-
-        } else {
-          nand->ecc.layout = &s3c_nand_oob_16;
-        }
-
-      } else {
-        nand_type = S3C_NAND_TYPE_MLC_4BIT;
-        nand->options |= NAND_NO_SUBPAGE_WRITE; /* NOP = 1 if MLC */
-        nand->ecc.read_page = s3c_nand_read_page_4bit;
-        nand->ecc.write_page = s3c_nand_write_page_4bit;
-        nand->ecc.size = 512;
-        nand->ecc.bytes = 8; /* really 7 bytes */
-        nand->ecc.layout = &s3c_nand_oob_mlc_64;
-
-        if (dev_id == 0xd5) {
-          printk("dev_id == 0xd5 select s3c_nand_oob_mlc\n");
-
-          // printk("**************************debug*****Use 8bit hardware ecc
-          // *******************\n");
-
-          nand_type = S3C_NAND_TYPE_MLC_8BIT;
-          nand->ecc.read_page = s3c_nand_read_page_8bit;
-          nand->ecc.write_page = s3c_nand_write_page_8bit;
-          nand->ecc.size = 512;
-          nand->ecc.bytes = 13;
-
-          nand->ecc.layout = &s3c_nand_oob_mlc_218_8bit;
-
-          printk(
-              "****Nandflash:ChipType= MLC  "
-              "ChipName=samsung-K9GAG08U0D************ \n");
-
-        } else {
-          printk(
-              "****Nandflash:ChipType=MLC  "
-              "ChipName=samsung-K9G8G08U0A************** \n");
-        }
+        nand->ecc.layout = &s3c_nand_oob_16;
       }
-    } else {
-      nand_type = S3C_NAND_TYPE_SLC;
-      nand->ecc.size = 512;
-      nand->cellinfo = 0;
-      nand->ecc.bytes = 4;
-      nand->ecc.layout = &s3c_nand_oob_16;
-    }
 
-    printk("S3C NAND Driver is using hardware ECC.\n");
+      printk("S3C NAND Driver is using hardware ECC.\n");
 #else
     nand->ecc.mode = NAND_ECC_SOFT;
     printk("S3C NAND Driver is using software ECC.\n");
 #endif
-    if (nand_scan(s3c_mtd, 1)) {
-      ret = -ENXIO;
-      goto exit_error;
+      if (nand_scan(s3c_mtd, 1)) {
+        ret = -ENXIO;
+        goto exit_error;
+      }
+
+      /* Register the partitions */
+      add_mtd_partitions(s3c_mtd, sets->partitions, sets->nr_partitions);
     }
 
-    /* Register the partitions */
-    add_mtd_partitions(s3c_mtd, sets->partitions, sets->nr_partitions);
+    pr_debug("initialized ok\n");
+    return 0;
+
+  exit_error:
+    kfree(s3c_mtd);
+
+    return ret;
   }
 
-  pr_debug("initialized ok\n");
-  return 0;
+  static int s3c2450_nand_probe(struct platform_device * dev) {
+    return s3c_nand_probe(dev, TYPE_S3C2450);
+  }
 
-exit_error:
-  kfree(s3c_mtd);
+  static int s3c6400_nand_probe(struct platform_device * dev) {
+    return s3c_nand_probe(dev, TYPE_S3C6400);
+  }
 
-  return ret;
-}
+  static int s3c6410_nand_probe(struct platform_device * dev) {
+    return s3c_nand_probe(dev, TYPE_S3C6410);
+  }
 
-static int s3c2450_nand_probe(struct platform_device *dev) {
-  return s3c_nand_probe(dev, TYPE_S3C2450);
-}
-
-static int s3c6400_nand_probe(struct platform_device *dev) {
-  return s3c_nand_probe(dev, TYPE_S3C6400);
-}
-
-static int s3c6410_nand_probe(struct platform_device *dev) {
-  return s3c_nand_probe(dev, TYPE_S3C6410);
-}
-
-static int s5pc100_nand_probe(struct platform_device *dev) {
-  return s3c_nand_probe(dev, TYPE_S5PC100);
-}
+  static int s5pc100_nand_probe(struct platform_device * dev) {
+    return s3c_nand_probe(dev, TYPE_S5PC100);
+  }
 
 /* PM Support */
 #if defined(CONFIG_PM)
-static int s3c_nand_suspend(struct platform_device *dev, pm_message_t pm) {
-  struct s3c_nand *info = platform_get_drvdata(dev);
-  clk_disable(s3c_nand.clk);
-  return 0;
-}
+  static int s3c_nand_suspend(struct platform_device * dev, pm_message_t pm) {
+    struct s3c_nand *info = platform_get_drvdata(dev);
+    clk_disable(s3c_nand.clk);
+    return 0;
+  }
 
-static int s3c_nand_resume(struct platform_device *dev) {
-  struct s3c_nand *info = platform_get_drvdata(dev);
-  clk_enable(s3c_nand.clk);
-  return 0;
-}
+  static int s3c_nand_resume(struct platform_device * dev) {
+    struct s3c_nand *info = platform_get_drvdata(dev);
+    clk_enable(s3c_nand.clk);
+    return 0;
+  }
 
 #else
 #define s3c_nand_suspend NULL
 #define s3c_nand_resume NULL
 #endif
 
-/* device management functions */
-static int s3c_nand_remove(struct platform_device *dev) {
-  platform_set_drvdata(dev, NULL);
+  /* device management functions */
+  static int s3c_nand_remove(struct platform_device * dev) {
+    platform_set_drvdata(dev, NULL);
 
-  return 0;
-}
+    return 0;
+  }
 
-static struct platform_driver s3c2450_nand_driver = {
-    .probe = s3c2450_nand_probe,
-    .remove = s3c_nand_remove,
-    .suspend = s3c_nand_suspend,
-    .resume = s3c_nand_resume,
-    .driver =
-        {
-            .name = "s3c2450-nand",
-            .owner = THIS_MODULE,
-        },
-};
+  static struct platform_driver s3c2450_nand_driver = {
+      .probe = s3c2450_nand_probe,
+      .remove = s3c_nand_remove,
+      .suspend = s3c_nand_suspend,
+      .resume = s3c_nand_resume,
+      .driver =
+          {
+              .name = "s3c2450-nand",
+              .owner = THIS_MODULE,
+          },
+  };
 
-static struct platform_driver s3c6400_nand_driver = {
-    .probe = s3c6400_nand_probe,
-    .remove = s3c_nand_remove,
-    .suspend = s3c_nand_suspend,
-    .resume = s3c_nand_resume,
-    .driver =
-        {
-            .name = "s3c6400-nand",
-            .owner = THIS_MODULE,
-        },
-};
+  static struct platform_driver s3c6400_nand_driver = {
+      .probe = s3c6400_nand_probe,
+      .remove = s3c_nand_remove,
+      .suspend = s3c_nand_suspend,
+      .resume = s3c_nand_resume,
+      .driver =
+          {
+              .name = "s3c6400-nand",
+              .owner = THIS_MODULE,
+          },
+  };
 
-static struct platform_driver s3c6410_nand_driver = {
-    .probe = s3c6410_nand_probe,
-    .remove = s3c_nand_remove,
-    .suspend = s3c_nand_suspend,
-    .resume = s3c_nand_resume,
-    .driver =
-        {
-            .name = "s3c6410-nand",
-            .owner = THIS_MODULE,
-        },
-};
+  static struct platform_driver s3c6410_nand_driver = {
+      .probe = s3c6410_nand_probe,
+      .remove = s3c_nand_remove,
+      .suspend = s3c_nand_suspend,
+      .resume = s3c_nand_resume,
+      .driver =
+          {
+              .name = "s3c6410-nand",
+              .owner = THIS_MODULE,
+          },
+  };
 
-static struct platform_driver s5pc100_nand_driver = {
-    .probe = s5pc100_nand_probe,
-    .remove = s3c_nand_remove,
-    .suspend = s3c_nand_suspend,
-    .resume = s3c_nand_resume,
-    .driver =
-        {
-            .name = "s5pc100-nand",
-            .owner = THIS_MODULE,
-        },
-};
+  static struct platform_driver s5pc100_nand_driver = {
+      .probe = s5pc100_nand_probe,
+      .remove = s3c_nand_remove,
+      .suspend = s3c_nand_suspend,
+      .resume = s3c_nand_resume,
+      .driver =
+          {
+              .name = "s5pc100-nand",
+              .owner = THIS_MODULE,
+          },
+  };
 
-static int __init s3c_nand_init(void) {
-  printk("S3C NAND Driver, (c) 2008 Samsung Electronics\n");
+  static int __init s3c_nand_init(void) {
+    printk("S3C NAND Driver, (c) 2008 Samsung Electronics\n");
 
-  platform_driver_register(&s3c2450_nand_driver);
-  platform_driver_register(&s3c6400_nand_driver);
-  platform_driver_register(&s3c6410_nand_driver);
-  return platform_driver_register(&s5pc100_nand_driver);
-}
+    platform_driver_register(&s3c2450_nand_driver);
+    platform_driver_register(&s3c6400_nand_driver);
+    platform_driver_register(&s3c6410_nand_driver);
+    return platform_driver_register(&s5pc100_nand_driver);
+  }
 
-static void __exit s3c_nand_exit(void) {
-  platform_driver_unregister(&s3c2450_nand_driver);
-  platform_driver_unregister(&s3c6400_nand_driver);
-  platform_driver_unregister(&s3c6410_nand_driver);
-  platform_driver_unregister(&s5pc100_nand_driver);
-}
+  static void __exit s3c_nand_exit(void) {
+    platform_driver_unregister(&s3c2450_nand_driver);
+    platform_driver_unregister(&s3c6400_nand_driver);
+    platform_driver_unregister(&s3c6410_nand_driver);
+    platform_driver_unregister(&s5pc100_nand_driver);
+  }
 
-module_init(s3c_nand_init);
-module_exit(s3c_nand_exit);
+  module_init(s3c_nand_init);
+  module_exit(s3c_nand_exit);
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Jinsung Yang <jsgood.yang@samsung.com>");
-MODULE_DESCRIPTION("S3C MTD NAND driver");
+  MODULE_LICENSE("GPL");
+  MODULE_AUTHOR("Jinsung Yang <jsgood.yang@samsung.com>");
+  MODULE_DESCRIPTION("S3C MTD NAND driver");

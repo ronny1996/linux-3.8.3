@@ -120,7 +120,7 @@ static struct mtd_partition ok6410_nand_part[] = {
 	},
 	[2] = {
 		.name	= "File System",
-		.size	= (200*SZ_1M),
+		.size	= (SZ_1K*SZ_1M),
 		.offset	= (6*SZ_1M),
 	},
 	[3] = {
