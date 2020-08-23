@@ -29,7 +29,7 @@
 #else
 #define S3C_ADDR(x)	(S3C_ADDR_BASE + (x))
 #endif
-
+#define S3C_VA_LCD S3C_ADDR(0X01100000)
 #define S3C_VA_IRQ	S3C_ADDR(0x00000000)	/* irq controller(s) */
 #define S3C_VA_SYS	S3C_ADDR(0x00100000)	/* system control */
 #define S3C_VA_MEM	S3C_ADDR(0x00200000)	/* memory control */

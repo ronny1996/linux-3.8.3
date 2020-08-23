@@ -157,11 +157,11 @@ static struct s3c_fb_pd_win ok6410_lcd_type0_fb_win = {
 static struct fb_videomode ok6410_lcd_type0_timing = {
 	/* 4.3" 480x272 */
 	.left_margin	= 3,
-	.right_margin	= 2,
-	.upper_margin	= 1,
-	.lower_margin	= 1,
-	.hsync_len	= 40,
-	.vsync_len	= 1,
+	.right_margin	= 5,
+	.upper_margin	= 3,
+	.lower_margin	= 3,
+	.hsync_len	= 42,
+	.vsync_len	= 120,
 	.xres		= 480,
 	.yres		= 272,
 };
@@ -233,11 +233,21 @@ static struct platform_device *ok6410_devices[] __initdata = {
 	&s3c_device_ts,
 };
 
+static struct map_desc ok6410_iodesc[] = {
+	{
+		.virtual = (unsigned long)S3C_VA_LCD,
+		.pfn	= __phys_to_pfn(S3C_PA_FB),
+		.length	= SZ_16K,
+		.type	= MT_DEVICE,
+	},
+};
+
 static void __init ok6410_map_io(void)
 {
 	u32 tmp;
 
-	s3c64xx_init_io(NULL, 0);
+	// s3c64xx_init_io(NULL, 0);
+	s3c64xx_init_io(ok6410_iodesc,ARRAY_SIZE(ok6410_iodesc));
 	s3c24xx_init_clocks(12000000);
 	s3c24xx_init_uarts(ok6410_uartcfgs, ARRAY_SIZE(ok6410_uartcfgs));
 
